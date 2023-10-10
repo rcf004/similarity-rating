@@ -1,4 +1,4 @@
-# similarity-rating
+# Similarity Metric
 Methodology to associate and quantify subjective ratings or psychological phenomena captured as timeseries.
 
 Abbreviated (though accurate) code repository here used to analyze continuous ratings of awkwardness while watching an episode of a television show. 
