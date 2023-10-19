@@ -55,6 +55,25 @@ def baseline_robustness(baseline):
     
     return mean_corr
 
+def even_subdivide(timeseries_length, divisions):
+    """
+    Create even subdivisions of an array of length `timeseries_length`
+    subdivisions are forced to be integers (floor division) so the final division
+    may be slightly larger than the others. Resulting array that is returned is
+    a list of tuples, where each tuple is the (start, stop) of all divisions
+    """
+    
+    stops = []
+    for i in range(divisions):
+        stops.append(timeseries_length//divisions * (i+1))
+    starts = [0] + stops[:-1]
+    stops[-1] = timeseries_length
+    start_stop = []
+    for start, stop in zip(starts, stops):
+        start_stop.append((start, stop))
+    
+    return start_stop
+
 #-----------------------------------------------------------------------------#
 #%%
 
@@ -104,6 +123,7 @@ similarity_validation = pd.read_csv('OA_YA_static-response_awk-sim_public.csv')
 
 bool_baseline = np.isin(allsubject_ids, baseline_ids) # find overlap
 
+non_baseline_ts = allsubjects[~bool_baseline] # get the non-baseline time series
 non_baseline = np.array(similarity_metrics)[~bool_baseline] # get the non-baseline subject scores
 non_baseline_ids = allsubject_ids[~bool_baseline] # same as above but with ids
 
@@ -129,7 +149,7 @@ print(sim_score_comp_rounded)
 #-----------------------------------------------------------------------------#
 #%%
 
-## Hypothesis 1 tests ##
+## Reliability and robustness tests ##
 
 # assessing robustness of baseline by checking average correlation
 # acts as one measure of variable reliability for the baseline sample
@@ -137,17 +157,45 @@ print(sim_score_comp_rounded)
 br = baseline_robustness(baseline)
 print(br)
 
-# now assessing reliability via split-correlation (correcting for length with Spearman-Brown)
+# assessing reliability of test sample via split half correlation
 
-# calculate split half correlation (random split - 100 iterations, average correlation)
-# more difficult than previously thought -  have to think about it
+# divide each participant's full rating into 2 evenly split sub ratings
+start_stop_subrating = even_subdivide(len(baseline_ts), 2)
 
-# now estimate r_full based on r_half with Spearman-Brown
+# init lists to hold dataframe information
+sub_scores = []
+sub_ID = []
+section = []
 
-# r_full = 2*r_half/(1+r_half)
+# iterate through timeseries (and ID)
+for ID, ts in zip(non_baseline_ids, non_baseline_ts):
+    sect = 1 # reset this count each subject loop
+    
+    # iterate through the 3 divided subsections per subject and get awk. sim for each
+    for start, stop in start_stop_subrating:
+        sub_scores.append(get_sim_metric(baseline_ts[start:stop], ts[start:stop])[1])
+        sub_ID.append(ID)
+        section.append(sect)
+        sect += 1
 
-# counterbalanace correlation
+# put this into a dataframe to analyze more easily
+split_awk_sim = pd.DataFrame()
+split_awk_sim['ID'] = sub_ID
+split_awk_sim['subsection'] = section
+split_awk_sim['awk_sim'] = sub_scores
 
+# split half correlation
+pivoted = pd.pivot_table(split_awk_sim, index='ID', columns='subsection')
+pivoted.columns = pivoted.columns.droplevel()
+
+r_half = np.corrcoef(pivoted[1], pivoted[2])[0][1]
+# spearman-brown 
+r_full = r_half * 2 / (1 + r_half)
+
+#-----------------------------------------------------------------------------#
+#%%
+
+## Hypothesis 1 tests ##
 
 # Hypothesis 1A: Shapirio-Wilk tests
 from scipy import stats
@@ -260,3 +308,15 @@ print(intercorrelation.to_string())
 
 
 #%%
+
+# full pairwise regressions (permutations of variables) to get significance of correlation table
+from itertools import combinations
+
+sig_cor = {}
+
+for t in combinations(['mean_correct', 'awk_sim', 'rtpj', 'pcc', 'dmpfc', 'vmpfc'], 2):
+    res = smf.ols(f'{t[0]} ~ {t[1]}', data=fullYA).fit()
+    if res.f_pvalue < 0.05:
+        sig_cor[f'{t[0]} ~ {t[1]}'] = True
+    else:
+        sig_cor[f'{t[0]} ~ {t[1]}'] = False
